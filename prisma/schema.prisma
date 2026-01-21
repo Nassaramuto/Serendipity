@@ -1,0 +1,174 @@
+// Serendipity - Context-Aware AI Matchmaker
+// Database Schema with pgvector support for semantic search
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [vector]
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id        String   @id @default(cuid())
+  clerkId   String   @unique
+  email     String   @unique
+  name      String?
+  photoUrl  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  contextWindow        ContextWindow?
+  matchesAsUser1       Match[]               @relation("MatchUser1")
+  matchesAsUser2       Match[]               @relation("MatchUser2")
+  messages             Message[]
+  communityMemberships CommunityMembership[]
+
+  @@index([clerkId])
+  @@index([email])
+}
+
+// ============================================
+// LIVING CONTEXT WINDOW
+// ============================================
+
+model ContextWindow {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Current state - what they're working on
+  workingOn String? @db.Text
+  skills    String[]
+  seeking   String? @db.Text
+  bio       String? @db.Text
+
+  // Location context
+  currentLocation String?
+  upcomingTravel  String[] // Array of location/event names
+
+  // Preferences - what types of connections they're open to
+  openTo String[] // ["collaborations", "advice", "mentorship", "cofounding", "hiring", "investment", "friendship"]
+
+  // Vector embedding for semantic search (1536 dimensions for OpenAI text-embedding-3-small)
+  embedding Unsupported("vector(1536)")?
+
+  // Profile completeness (0-1)
+  completeness Float @default(0)
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ============================================
+// MATCHING SYSTEM
+// ============================================
+
+model Match {
+  id      String @id @default(cuid())
+  user1Id String
+  user2Id String
+  user1   User   @relation("MatchUser1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2   User   @relation("MatchUser2", fields: [user2Id], references: [id], onDelete: Cascade)
+
+  // Match quality
+  relevanceScore  Float // 0-1 composite score
+  relevanceReason String? @db.Text // AI-generated explanation
+
+  // Interest tracking (null = not yet responded)
+  user1Interested Boolean?
+  user2Interested Boolean?
+
+  // Revealed when both express interest
+  revealedAt DateTime?
+
+  // Conversation created on mutual match
+  conversation Conversation?
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([user1Id, user2Id])
+  @@index([user1Id])
+  @@index([user2Id])
+  @@index([relevanceScore])
+  @@index([createdAt])
+}
+
+// ============================================
+// MESSAGING
+// ============================================
+
+model Conversation {
+  id       String    @id @default(cuid())
+  matchId  String    @unique
+  match    Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([matchId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  content        String       @db.Text
+  read           Boolean      @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId])
+  @@index([senderId])
+  @@index([createdAt])
+}
+
+// ============================================
+// COMMUNITIES
+// ============================================
+
+model Community {
+  id          String                @id @default(cuid())
+  name        String
+  slug        String                @unique
+  description String?               @db.Text
+  logoUrl     String?
+  memberships CommunityMembership[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+}
+
+model CommunityMembership {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  communityId String
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  role        String    @default("member") // "member", "admin", "owner"
+
+  joinedAt DateTime @default(now())
+
+  @@unique([userId, communityId])
+  @@index([userId])
+  @@index([communityId])
+}
